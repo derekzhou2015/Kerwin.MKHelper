@@ -11,34 +11,52 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
-
+using Interceptor;
 namespace MKHelper
 {
     public partial class Form1 : Form
     {
-        public static bool isRun = false;
-        public static Thread actionThread;
-        private bool mouseIsDown = false;
+        private delegate void BeginInvokeCallback();
+        private MyApp myApp;
+        public bool IsRunning = false;
+
         public Form1()
         {
             InitializeComponent();
+            AppCon.Load();
+            myApp = new MyApp();
+            myApp.On_ToggleState += delegate (object sender, EventArgs e)
+            {
+                ChangeForm();
+            };
+
+            HotKey.InstallHook();
+            HotKey.On_KeyUp += btn_startorstop_Click;
         }
+
         private void btn_startorstop_Click(object sender, EventArgs e)
         {
-            if (isRun)
+            if (myApp.RunningState)
             {
-                isRun = false;
-                btn_startorstop.Text = "Run";
+                myApp.Stop();
             }
             else
             {
-                isRun = true;
-                btn_startorstop.Text = "Stop";
-                actionThread = new Thread(actionThread_ThreadStart);
-                actionThread.IsBackground = true;
-                actionThread.Start();
+                myApp.Run();
             }
-            controls_status_change();
+            ChangeForm();
+        }
+        private void btn_save_config_Click(object sender, EventArgs e)
+        {
+            AppCon.ExcuteKey = (Interceptor.Keys)Enum.Parse(typeof(Interceptor.Keys), txt_key.Text);
+            AppCon.PowerKey = (Interceptor.Keys)Enum.Parse(typeof(Interceptor.Keys), tbox_startkey.Text);
+            AppCon.Repeat = (int)ntxt_repeat.Value;
+            AppCon.Delay = (int)ntxt_delay.Value;
+            AppCon.Window = tbox_target.Text;
+            AppCon.Handler = lab_handler.Text;
+            AppCon.IsTop = TopMost = cbox_istop.Checked;
+            AppCon.Save();
+            MessageBox.Show("Save setting successfully.", "Save setting message.");
         }
         private void txt_key_KeyDown(object sender, KeyEventArgs e)
         {
@@ -48,36 +66,21 @@ namespace MKHelper
         {
             tbox_KeyDown(sender, e);
         }
-        private void tbox_stopkey_KeyDown(object sender, KeyEventArgs e)
-        {
-            tbox_KeyDown(sender, e);
-        }
         private void tbox_target_KeyDown(object sender, KeyEventArgs e)
         {
             e.Handled = true;
             e.SuppressKeyPress = true;
         }
-        private void btn_find_MouseUp(object sender, MouseEventArgs e)
-        {
-            mouseIsDown = false;
-            Cursor = Cursors.Default;
-
-        }
-        private void btn_find_MouseDown(object sender, MouseEventArgs e)
-        {
-            mouseIsDown = true;
-            Cursor = Cursors.Cross;
-        }
         private void btn_find_MouseMove(object sender, MouseEventArgs e)
         {
-            if (mouseIsDown)
+            if (e.Button == MouseButtons.Left)
             {
                 Point point;
-                MKEvents.GetCursorPos(out point);
-                label7.Text = point.X.ToString() + "/" + point.Y.ToString();
-                IntPtr hWnd = MKEvents.WindowFromPoint(point);
+                WinAPI.GetCursorPos(out point);
+                IntPtr hWnd = WinAPI.WindowFromPoint(point);
+                lab_handler.Text = hWnd.ToString();
                 int processId;
-                MKEvents.GetWindowThreadProcessId(hWnd, out processId);
+                WinAPI.GetWindowThreadProcessId(hWnd, out processId);
                 Process proc = Process.GetProcessById(processId);
                 tbox_target.Text = proc.MainWindowTitle;
             }
@@ -91,46 +94,27 @@ namespace MKHelper
             else
                 TopMost = false;
         }
+
         private void Form1_Load(object sender, EventArgs e)
         {
-            TopMost = cbox_istop.Checked;
-            Hook.InstallHook();
+            LoadAppConfig();
         }
-        private void actionThread_ThreadStart(object sender)
+        private void Form1_FormClosing(object sender, FormClosingEventArgs e)
         {
-            var repeat = (int)ntxt_repeat.Value;
-            var delay = (int)ntxt_delay.Value;
-            var key_str = txt_key.Text.Trim();
-            var control = Regex.IsMatch(key_str, @"Ctrl");
-            var shift = Regex.IsMatch(key_str, @"Shift");
-            var alt = Regex.IsMatch(key_str, @"Alt");
-            var letter = Regex.Match(key_str, @"[F]?[A-Z0-9]\d?$").Value;
-            letter = Regex.Replace(letter, @"^\d$", "D$0");
-            var key = (Keys)Enum.Parse(typeof(Keys), letter, true);
-            var bvk = Convert.ToByte((char)key);
-            var i = 0;
-            while (isRun)
-            {
-                Thread.Sleep(delay);
-                if (!checkActivedWindow(tbox_target.Text)) continue;
-                i++;
-                if (control)
-                    MKEvents.keybd_event(MKEvents.vbKeyControl, 0, 0, 0);
-                if (shift)
-                    MKEvents.keybd_event(MKEvents.vbKeyShift, 0, 0, 0);
-                if (alt)
-                    MKEvents.keybd_event(MKEvents.vbKeyAlt, 0, 0, 0);
-                MKEvents.keybd_event(bvk, 0, 0, 0);
-                MKEvents.keybd_event(bvk, 0, 2, 0);
-                if (control)
-                    MKEvents.keybd_event(MKEvents.vbKeyControl, 0, 2, 0);
-                if (shift)
-                    MKEvents.keybd_event(MKEvents.vbKeyShift, 0, 2, 0);
-                if (alt)
-                    MKEvents.keybd_event(MKEvents.vbKeyAlt, 0, 2, 0);
+            e.Cancel = true;
+            Hide();
+        }
 
-                if (i >= repeat && repeat != 0)
-                    break;
+        private void notifyIcon1_MouseDoubleClick(object sender, MouseEventArgs e)
+        {
+            Show();
+        }
+        private void contextMenuStrip1_ItemClicked(object sender, ToolStripItemClickedEventArgs e)
+        {
+            if (e.ClickedItem.Name == "exit")
+            {
+                Environment.Exit(0);
+                base.OnClosed(e);
             }
         }
 
@@ -150,30 +134,31 @@ namespace MKHelper
                 val += ((char)e.KeyValue).ToString();
             else
                 val += e.KeyCode.ToString().ToUpper();
+            val = e.KeyCode.ToString().ToUpper();
             tbox.Text = val;
         }
-        private void controls_status_change()
+        private void LoadAppConfig()
         {
-            foreach (var item in Controls)
+            txt_key.Text = AppCon.ExcuteKey.ToString();
+            tbox_startkey.Text = AppCon.PowerKey.ToString();
+            ntxt_repeat.Value = AppCon.Repeat;
+            ntxt_delay.Value = AppCon.Delay;
+            tbox_target.Text = AppCon.Window;
+            lab_handler.Text = AppCon.Handler;
+            cbox_istop.Checked = TopMost = AppCon.IsTop;
+        }
+        private void ChangeForm()
+        {
+            btn_startorstop.BeginInvoke(new BeginInvokeCallback(() =>
             {
-                var pattern = @"(NumericUpDown|TextBox)$";
-                Regex regex = new Regex(pattern);
-                if (regex.IsMatch(item.GetType().ToString()))
-                {
-                    var con = item as Control;
-                    con.Enabled = !isRun;
-                }
-            }
+                btn_startorstop.Text = !myApp.RunningState ? "Run" : "Stop";
+            }));
+            progressBar1.BeginInvoke(new BeginInvokeCallback(() =>
+            {
+                progressBar1.Style = myApp.RunningState ? ProgressBarStyle.Marquee : ProgressBarStyle.Blocks;
+            }));
         }
-        private bool checkActivedWindow(string targetWindowTitle)
-        {
-            var hWnd = MKEvents.GetForegroundWindow();
-            int processId;
-            MKEvents.GetWindowThreadProcessId(hWnd, out processId);
-            if (processId == 0) return false;
-            Process proc = Process.GetProcessById(processId);
-            return targetWindowTitle == proc.MainWindowTitle;
-        }
+
         #endregion
 
 
